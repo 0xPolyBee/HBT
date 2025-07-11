@@ -20,8 +20,9 @@ contract HBTStaking is ReentrancyGuard, Pausable, AccessControl {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
 
-    // HBT 토큰 컨트랙트
-    IERC20 public immutable HBTToken; // hbtToken -> HBTToken으로 변경
+    // HBT 토큰 컨트랙트 주소를 상수로 정의
+    // HBT 토큰 계약 주소는 2025년 7월 11일 네트워크에 배포되었습니다.
+    IERC20 public immutable HBTToken = IERC20(0x37D271bFaA99A89bbbF23c6751199BcB0940C382);
 
     // 스테이킹 상수
     uint256 public constant MIN_STAKE_AMOUNT = 200000 * 10**18; // 200,000 HBT
@@ -29,7 +30,7 @@ contract HBTStaking is ReentrancyGuard, Pausable, AccessControl {
     uint256 public constant MIN_STAKING_PERIOD = 14 days;
     uint256 public constant WITHDRAWAL_DELAY = 18 hours;
     uint256 public constant APY = 109; // 10.9%
-    uint256 public constant DAILY_WITHDRAWAL_LIMIT = 21000000 * 10**18; // 21,000,000 HBT
+    uint256 public constant DAILY_WITHDRAWAL_LIMIT = 20000000 * 10**18; // 20,000,000 HBT
 
     // 전체 스테이킹 금액
     uint256 public totalStaked;
@@ -58,10 +59,7 @@ contract HBTStaking is ReentrancyGuard, Pausable, AccessControl {
     event RewardsDeposited(address indexed admin, uint256 amount, uint256 timestamp);
     event RewardsWithdrawn(address indexed admin, uint256 amount, uint256 timestamp);
 
-    constructor(address _hbtToken) {
-        require(_hbtToken != address(0), "Invalid token address");
-        HBTToken = IERC20(_hbtToken); // hbtToken -> HBTToken으로 변경
-        
+    constructor() { // 생성자에서 _hbtToken 인자를 제거했습니다.
         // 역할 설정
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(ADMIN_ROLE, msg.sender);
@@ -85,7 +83,7 @@ contract HBTStaking is ReentrancyGuard, Pausable, AccessControl {
         }
 
         // 토큰 전송
-        HBTToken.safeTransferFrom(msg.sender, address(this), _amount); // hbtToken -> HBTToken으로 변경
+        HBTToken.safeTransferFrom(msg.sender, address(this), _amount);
 
         // 스테이킹 정보 업데이트
         stakes[msg.sender] = StakeInfo({
@@ -144,7 +142,7 @@ contract HBTStaking is ReentrancyGuard, Pausable, AccessControl {
         stakes[msg.sender].lastRewardTime = block.timestamp;
 
         // 토큰 전송
-        HBTToken.safeTransfer(msg.sender, rewards); // hbtToken -> HBTToken으로 변경
+        HBTToken.safeTransfer(msg.sender, rewards);
         emit RewardsClaimed(msg.sender, rewards, block.timestamp);
     }
 
@@ -172,7 +170,7 @@ contract HBTStaking is ReentrancyGuard, Pausable, AccessControl {
 
     // 컨트랙트 잔고 확인 함수
     function checkContractBalance() public view returns (uint256) {
-        return HBTToken.balanceOf(address(this)); // hbtToken -> HBTToken으로 변경
+        return HBTToken.balanceOf(address(this));
     }
 
     // 출금 가능 여부 확인 함수
@@ -217,9 +215,9 @@ contract HBTStaking is ReentrancyGuard, Pausable, AccessControl {
 
         // 토큰 전송
         if (rewards > 0) {
-            HBTToken.safeTransfer(msg.sender, amount.add(rewards)); // hbtToken -> HBTToken으로 변경
+            HBTToken.safeTransfer(msg.sender, amount.add(rewards));
         } else {
-            HBTToken.safeTransfer(msg.sender, amount); // hbtToken -> HBTToken으로 변경
+            HBTToken.safeTransfer(msg.sender, amount);
         }
 
         emit Withdrawn(msg.sender, amount, rewards, block.timestamp);
@@ -251,9 +249,9 @@ contract HBTStaking is ReentrancyGuard, Pausable, AccessControl {
 
         // 토큰 전송
         if (rewards > 0) {
-            HBTToken.safeTransfer(_user, amount.add(rewards)); // hbtToken -> HBTToken으로 변경
+            HBTToken.safeTransfer(_user, amount.add(rewards));
         } else {
-            HBTToken.safeTransfer(_user, amount); // hbtToken -> HBTToken으로 변경
+            HBTToken.safeTransfer(_user, amount);
         }
 
         emit EmergencyWithdrawn(_user, amount, rewards, msg.sender, block.timestamp);
@@ -262,23 +260,23 @@ contract HBTStaking is ReentrancyGuard, Pausable, AccessControl {
     // 관리자가 보상 토큰을 예치하는 함수
     function depositRewards(uint256 _amount) external onlyRole(ADMIN_ROLE) {
         require(_amount > 0, "Amount must be greater than 0");
-        HBTToken.safeTransferFrom(msg.sender, address(this), _amount); // hbtToken -> HBTToken으로 변경
+        HBTToken.safeTransferFrom(msg.sender, address(this), _amount);
         emit RewardsDeposited(msg.sender, _amount, block.timestamp);
     }
 
     // 관리자가 남은 보상 토큰을 회수하는 함수 (전체 스테이킹 금액 보장)
     function withdrawRewards(uint256 _amount) external onlyRole(ADMIN_ROLE) {
         require(_amount > 0, "Amount must be greater than 0");
-        uint256 availableRewards = HBTToken.balanceOf(address(this)); // hbtToken -> HBTToken으로 변경
+        uint256 availableRewards = HBTToken.balanceOf(address(this));
         require(availableRewards >= _amount, "Insufficient rewards balance");
         require(availableRewards - _amount >= totalStaked, "Cannot withdraw more than available rewards");
-        HBTToken.safeTransfer(msg.sender, _amount); // hbtToken -> HBTToken으로 변경
+        HBTToken.safeTransfer(msg.sender, _amount);
         emit RewardsWithdrawn(msg.sender, _amount, block.timestamp);
     }
 
     // 현재 보상 토큰 잔액 조회 함수
     function getRewardsBalance() external view returns (uint256) {
-        return HBTToken.balanceOf(address(this)); // hbtToken -> HBTToken으로 변경
+        return HBTToken.balanceOf(address(this));
     }
 
     // 관리자 함수
