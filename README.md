@@ -15,7 +15,7 @@ Honey Bit is designed to build a **sustainable decentralized financial ecosystem
 
 ## Smart Contracts
 * HBT Token: `0x37D271bFaA99A89bbbF23c6751199BcB0940C382`
-* HBT Staking: `0x280472f0c05AD9B9C0E8C26Abf9155BEE9a10D49` (Please provide the exact address for the HBT Staking contract if you have it.)
+* HBT Staking: `0x39966407064004Ee46F84Dd1B7092C007F3a4939`
 
 ## Security Considerations
 * **ReentrancyGuard** and **Pausable** used
