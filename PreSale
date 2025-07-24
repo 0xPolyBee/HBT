@@ -1,0 +1,151 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.30;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+
+contract HBTPreSale is Ownable, Pausable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
+    // 토큰 주소
+    IERC20 public immutable hbtToken;
+    IERC20 public immutable usdtToken;
+
+    // Chainlink 오라클 (MATIC/USD)
+    AggregatorV3Interface public immutable maticUsdPriceFeed;
+
+    // 판매 기간
+    uint256 public immutable saleStart;
+    uint256 public immutable saleEnd;
+
+    // 상수
+    uint256 public constant USDT_RATE = 2000; // 1 USDT = 2,000 HBT
+    uint256 public constant USDT_DECIMALS = 1e6;   // USDT: 6 decimals
+    uint256 public constant HBT_DECIMALS = 1e18;   // HBT: 18 decimals
+    uint256 public constant MIN_PURCHASE = 50 * USDT_DECIMALS;    // 50 USDT
+    uint256 public constant MAX_PURCHASE = 2000 * USDT_DECIMALS;  // 2,000 USDT
+    uint256 public constant MAX_TOTAL_SALE = 100_000_000 * HBT_DECIMALS; // 1억 HBT
+
+    // 누적 구매액(USDT, POL 환산 합산)
+    mapping(address => uint256) public purchasedTotal;
+    uint256 public totalSold;
+
+    event BuyWithUSDT(address indexed buyer, uint256 usdtAmount, uint256 hbtAmount);
+    event BuyWithPOL(address indexed buyer, uint256 polAmount, uint256 hbtAmount, uint256 usdtEquivalent);
+    event WithdrawTokens(address indexed token, uint256 amount);
+    event WithdrawPOL(uint256 amount);
+    event WithdrawRemainingHBT(uint256 amount);
+    event SalePaused();
+    event SaleUnpaused();
+
+    constructor(
+        address _hbtToken,
+        address _usdtToken,
+        address _maticUsdPriceFeed
+    ) Ownable(msg.sender) Pausable() ReentrancyGuard() {
+        require(_hbtToken != address(0) && _usdtToken != address(0) && _maticUsdPriceFeed != address(0), "Zero address");
+        hbtToken = IERC20(_hbtToken);
+        usdtToken = IERC20(_usdtToken);
+        maticUsdPriceFeed = AggregatorV3Interface(_maticUsdPriceFeed);
+        saleStart = block.timestamp;
+        // 2025-12-02 00:00:00 UTC = 1764633600
+        saleEnd = 1764633600;
+    }
+
+    modifier onlyWhileSale() {
+        require(block.timestamp >= saleStart && block.timestamp <= saleEnd, "Sale not active");
+        _;
+    }
+
+    // USDT로 구매
+    function buyWithUSDT(uint256 usdtAmount) external whenNotPaused onlyWhileSale nonReentrant {
+        require(usdtAmount >= MIN_PURCHASE, "Below minimum purchase");
+        require(purchasedTotal[msg.sender] + usdtAmount <= MAX_PURCHASE, "Exceeds max purchase");
+
+        uint256 hbtAmount = (usdtAmount * USDT_RATE * HBT_DECIMALS) / USDT_DECIMALS;
+        require(totalSold + hbtAmount <= MAX_TOTAL_SALE, "Exceeds total sale cap");
+        require(hbtToken.balanceOf(address(this)) >= hbtAmount, "Insufficient HBT balance");
+
+        usdtToken.safeTransferFrom(msg.sender, address(this), usdtAmount);
+        hbtToken.safeTransfer(msg.sender, hbtAmount);
+
+        purchasedTotal[msg.sender] += usdtAmount;
+        totalSold += hbtAmount;
+
+        emit BuyWithUSDT(msg.sender, usdtAmount, hbtAmount);
+    }
+
+    // POL(MATIC)으로 구매 (실시간 시세 연동)
+    function buyWithPOL() external payable whenNotPaused onlyWhileSale nonReentrant {
+        require(msg.value > 0, "POL required");
+
+        // Chainlink 오라클에서 MATIC/USD 가격 받아오기 (소수점 8자리)
+        (, int price,,,) = maticUsdPriceFeed.latestRoundData();
+        require(price > 0, "Oracle price error");
+        uint256 maticUsdPrice = uint256(price); // 예: 0.22700000 → 22700000
+
+        // msg.value(18 decimals) * maticUsdPrice(8 decimals) / 1e18 = USD 단위 (8 decimals)
+        uint256 usdValue = (msg.value * maticUsdPrice) / 1e18; // 8 decimals
+        // USDT(6 decimals)로 변환
+        uint256 usdtEquivalent = usdValue / 1e2; // 8→6 decimals
+
+        require(usdtEquivalent >= MIN_PURCHASE, "Below minimum purchase");
+        require(purchasedTotal[msg.sender] + usdtEquivalent <= MAX_PURCHASE, "Exceeds max purchase");
+
+        // HBT 지급량: usdtEquivalent(6 decimals) * 2,000 * 1e18 / 1e6
+        uint256 hbtAmount = (usdtEquivalent * USDT_RATE * HBT_DECIMALS) / USDT_DECIMALS;
+        require(totalSold + hbtAmount <= MAX_TOTAL_SALE, "Exceeds total sale cap");
+        require(hbtToken.balanceOf(address(this)) >= hbtAmount, "Insufficient HBT balance");
+
+        hbtToken.safeTransfer(msg.sender, hbtAmount);
+        purchasedTotal[msg.sender] += usdtEquivalent;
+        totalSold += hbtAmount;
+
+        emit BuyWithPOL(msg.sender, msg.value, hbtAmount, usdtEquivalent);
+    }
+
+    // 판매 일시중지/재개 (Owner만)
+    function pauseSale() external onlyOwner {
+        _pause();
+        emit SalePaused();
+    }
+    function unpauseSale() external onlyOwner {
+        _unpause();
+        emit SaleUnpaused();
+    }
+
+    // Owner: HBT, USDT, 기타 ERC20 회수
+    function withdrawTokens(address token, uint256 amount) external onlyOwner nonReentrant {
+        IERC20(token).safeTransfer(owner(), amount);
+        emit WithdrawTokens(token, amount);
+    }
+
+    // Owner: POL(MATIC) 회수
+    function withdrawPOL() external onlyOwner nonReentrant {
+        uint256 bal = address(this).balance;
+        require(bal > 0, "No balance");
+        (bool sent, ) = owner().call{value: bal}("");
+        require(sent, "POL transfer failed");
+        emit WithdrawPOL(bal);
+    }
+
+    // Owner: 남은 HBT 회수 (판매 종료 후)
+    function withdrawRemainingHBT() external onlyOwner nonReentrant {
+        require(block.timestamp > saleEnd || totalSold >= MAX_TOTAL_SALE, "Only after sale end");
+        uint256 bal = hbtToken.balanceOf(address(this));
+        require(bal > 0, "No HBT balance");
+        hbtToken.safeTransfer(owner(), bal);
+        emit WithdrawRemainingHBT(bal);
+    }
+
+    // POL로 직접 송금 방지 (컨트랙트에 직접 송금 시 revert)
+    receive() external payable {
+        revert("Use buyWithPOL function");
+    }
+    fallback() external payable {
+        revert("Use buyWithPOL function");
+    }
+} 
